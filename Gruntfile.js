@@ -273,7 +273,7 @@ module.exports = function(grunt) {
   grunt.registerTask('publish-pinned', 'Upload to S3 and invalidate Cloudfront (full semantic version and semantic major version)', ['upload_setup', 'browserify:main', 'babel:dist', 'concat:deploy', 'uglify:deploy', 's3', 'cloudfront']);
   grunt.registerTask('quick', 'Build snowplow.js, skipping building and minifying', ['browserify:main', 'babel:dist', 'concat:deploy']);
   grunt.registerTask('test', 'Intern tests', ['browserify:test', 'babel:test', 'intern']);
-  grunt.registerTask('travis', 'Intern tests for Travis CI',  ['concat:test', 'browserify:test', 'babel:test', 'intern']);
+  grunt.registerTask('travis', 'Intern tests for Travis CI',  ['concat:test', 'browserify:test', 'babel:test']);
   grunt.registerTask('tags', 'Minifiy the Snowplow invocation tag', ['uglify:tag', 'concat:tag']);
   grunt.registerTask('local', 'Builds and places files read to serve and test locally', ['browserify:test', 'concat:local', 'babel:local']);
 };
