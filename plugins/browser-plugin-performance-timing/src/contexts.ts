@@ -60,3 +60,49 @@ export interface PerformanceTiming {
   proxyStart?: number;
   proxyEnd?: number;
 }
+
+export interface PerformanceNavigationTiming {
+  [key: string]: number | string | readonly object[] | undefined;
+  redirectStart?: number;
+  redirectEnd?: number;
+  fetchStart?: number;
+  domainLookupStart?: number;
+  domainLookupEnd?: number;
+  connectStart?: number;
+  secureConnectionStart?: number;
+  connectEnd?: number;
+  requestStart?: number;
+  responseStart?: number;
+  responseEnd?: number;
+  unloadEventStart?: number;
+  unloadEventEnd?: number;
+  domInteractive?: number;
+  domContentLoadedEventStart?: number;
+  domContentLoadedEventEnd?: number;
+  domComplete?: number;
+  loadEventStart?: number;
+  loadEventEnd?: number;
+  msFirstPaint?: number;
+  chromeFirstPaint?: number;
+  requestEnd?: number;
+  proxyStart?: number;
+  proxyEnd?: number;
+  workerStart?: number;
+  redirectCount?: number;
+  decodedBodySize?: number;
+  encodedBodySize?: number;
+  transferSize?: number;
+  duration?: number;
+  startTime?: number;
+  type?: string;
+  name?: string;
+  initiatorType?: string;
+  nextHopProtocol?: string;
+  entryType?: string;
+  timeOrigin?: number;
+  serverTiming?: {
+    name: string;
+    description: string;
+    duration: number;
+  }[];
+}
