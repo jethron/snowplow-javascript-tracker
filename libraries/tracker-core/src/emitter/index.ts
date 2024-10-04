@@ -51,6 +51,11 @@ export interface EmitterConfigurationBase {
    */
   maxPostBytes?: number;
   /**
+   * Attempt to compress POST request bodies. May not be supported by collector
+   * @defaultValue false
+   */
+  useCompression?: boolean;
+  /**
    * The max size a GET request (its complete URL) can be. Requests over this size will be tried as a POST request.
    * @defaultValue unlimited
    */
@@ -215,6 +220,7 @@ export function newEmitter({
   useStm,
   eventStore = newInMemoryEventStore({}),
   credentials,
+  useCompression = false,
 }: EmitterConfiguration): Emitter {
   let idServiceCalled = false;
   let flushInProgress = false;
@@ -316,6 +322,7 @@ export function newEmitter({
       maxPostBytes,
       useStm,
       credentials,
+      useCompression,
     });
   }
 

@@ -1,5 +1,5 @@
 import { PAYLOAD_DATA_SCHEMA } from '../schemata';
-import { EmitterEvent } from "./emitter_event";
+import { EmitterEvent } from './emitter_event';
 
 /**
  * Wrapper around a request with events to the collector.
@@ -49,8 +49,9 @@ export interface EmitterRequestConfiguration {
   postPath?: string;
   useStm?: boolean;
   bufferSize?: number;
-  maxPostBytes?: number,
+  maxPostBytes?: number;
   credentials?: 'omit' | 'same-origin' | 'include';
+  useCompression?: boolean;
 }
 
 /**
@@ -92,10 +93,12 @@ export function newEmitterRequest({
   bufferSize,
   maxPostBytes = 40000,
   credentials = 'include',
+  useCompression = false,
 }: EmitterRequestConfiguration): EmitterRequest {
   let events: EmitterEvent[] = [];
   let usePost = eventMethod.toLowerCase() === 'post';
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let addEncoding = false;
 
   function countBytes(): number {
     return events.reduce(
@@ -111,7 +114,6 @@ export function newEmitterRequest({
   function getServerAnonymizationOfExistingEvents(): boolean | undefined {
     return events.length > 0 ? events[0].getServerAnonymization() : undefined;
   }
-
 
   function addEvent(event: EmitterEvent) {
     if (events.length > 0 && getServerAnonymizationOfExistingEvents() !== event.getServerAnonymization()) {
@@ -141,6 +143,10 @@ export function newEmitterRequest({
     const headers = new Headers();
     if (usePost) {
       headers.append('Content-Type', 'application/json; charset=UTF-8');
+
+      if (useCompression && addEncoding) {
+        headers.append('Content-Encoding', 'gzip');
+      }
     }
     if (customHeaders) {
       Object.keys(customHeaders).forEach((key) => {
@@ -161,7 +167,7 @@ export function newEmitterRequest({
     if (port) {
       collectorUrl = `${collectorUrl}:${port}`;
     }
-    
+
     const path = usePost ? postPath : '/i';
     return collectorUrl + path;
   }
@@ -170,7 +176,7 @@ export function newEmitterRequest({
     const controller = new AbortController();
     timer = setTimeout(() => {
       console.error('Request timed out');
-      controller.abort()
+      controller.abort();
     }, connectionTimeout ?? 5000);
 
     const requestOptions: RequestInit = {
@@ -188,9 +194,21 @@ export function newEmitterRequest({
   function makePostRequest(): Request {
     const batch = attachStmToEvent(events.map((event) => event.getPOSTRequestBody()));
 
+    let body: string | ReadableStream = encloseInPayloadDataEnvelope(batch);
+
+    if (useCompression) {
+      try {
+        const plain = new Blob([body]).stream();
+        body = plain.pipeThrough(new CompressionStream('gzip'));
+        addEncoding = true;
+      } catch (e) {
+        // failed to compress, continue in plain text
+      }
+    }
+
     return makeRequest(getFullCollectorUrl(), {
       method: 'POST',
-      body: encloseInPayloadDataEnvelope(batch),
+      body,
     });
   }
 
