@@ -48,6 +48,18 @@ declare global {
   }
 }
 
+type Commands = keyof { [K in keyof typeof Snowplow as (typeof Snowplow)[K] extends () => any ? K : never]: any };
+type CommandParams = {
+  [k in Commands]: Parameters<(typeof Snowplow)[k]> extends [...params: infer A, trackers?: any]
+    ? A
+    : Parameters<(typeof Snowplow)[k]>;
+};
+type Callback<A extends [...any]> = (this: Record<string, Snowplow.BrowserTracker>, ...args: A) => void;
+type CallbackCall<A extends [...any]> = [callback: Callback<A>, ...args: A];
+type CommandCall = { [C in Commands]: [command: C | `${C}:${string}`, ...args: CommandParams[C]] }[Commands];
+
+export type QueueCall<P extends [...any] = [...any]> = CommandCall | (P extends any ? CallbackCall<P> : never);
+
 /*
  * Proxy object
  * This allows the caller to continue push()'ing after the Tracker has been initialized and loaded
@@ -61,7 +73,7 @@ export interface Queue {
    * or:
    *      [ functionObject, optional_parameters ]
    */
-  push: (...args: any[]) => void;
+  push: (...args: QueueCall[]) => void;
 }
 
 interface PluginQueueItem {
@@ -76,7 +88,7 @@ type FunctionParameters = [Record<string, unknown> | null | undefined, Array<str
  * @param functionName - The global function name this script has been created on
  * @param asyncQueue - The existing queue of items to be processed
  */
-export function InQueueManager(functionName: string, asyncQueue: Array<unknown>): Queue {
+export function InQueueManager(functionName: string, asyncQueue: Array<QueueCall> | Queue): Queue {
   const windowAlias = window,
     documentAlias = document,
     sharedState: SharedState = createSharedState(),
@@ -251,10 +263,10 @@ export function InQueueManager(functionName: string, asyncQueue: Array<unknown>)
    * or:
    *      [ functionObject, optional_parameters ]
    */
-  function applyAsyncFunction(...args: any[]) {
+  function applyAsyncFunction(...args: QueueCall[]) {
     // Outer loop in case someone push'es in zarg of arrays
     for (let i = 0; i < args.length; i += 1) {
-      let parameterArray = args[i],
+      const parameterArray = args[i],
         input = Array.prototype.shift.call(parameterArray);
 
       // Custom callback rather than tracker method, called with trackerDictionary as the context
@@ -291,7 +303,7 @@ export function InQueueManager(functionName: string, asyncQueue: Array<unknown>)
 
       let fnParameters: FunctionParameters;
       if (parameterArray.length > 0) {
-        fnParameters = [parameterArray[0], trackerIdentifiers];
+        fnParameters = [parameterArray[0] as (typeof parameterArray)[1], trackerIdentifiers];
       } else if (typeof availableFunctions[f] !== 'undefined') {
         fnParameters = availableFunctions[f].length === 2 ? [{}, trackerIdentifiers] : [trackerIdentifiers];
       } else {
@@ -308,7 +320,7 @@ export function InQueueManager(functionName: string, asyncQueue: Array<unknown>)
   }
 
   // We need to manually apply any events collected before this initialization
-  for (let i = 0; i < asyncQueue.length; i++) {
+  for (let i = 0; 'length' in asyncQueue && i < asyncQueue.length; i++) {
     applyAsyncFunction(asyncQueue[i]);
   }
 

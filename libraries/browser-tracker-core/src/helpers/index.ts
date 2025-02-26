@@ -74,7 +74,7 @@ export function isInteger(int: Object): int is number {
  * Checks if the input parameter is a function
  * @param func - The object to check
  */
-export function isFunction(func: unknown) {
+export function isFunction(func: unknown): func is Function {
   if (func && typeof func === 'function') {
     return true;
   }
@@ -290,7 +290,13 @@ export function isValueInArray<T>(val: T, array: T[]) {
  * @param cookieName - The name of the cookie to delete
  * @param domainName - The domain the cookie is in
  */
-export function deleteCookie(cookieName: string, path?: string, domainName?: string, sameSite?: string, secure?: boolean) {
+export function deleteCookie(
+  cookieName: string,
+  path?: string,
+  domainName?: string,
+  sameSite?: string,
+  secure?: boolean
+) {
   cookie(cookieName, '', -1, path, domainName, sameSite, secure);
 }
 

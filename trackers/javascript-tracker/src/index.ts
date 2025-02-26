@@ -28,7 +28,8 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-import { InQueueManager, Queue } from './in_queue';
+import { InQueueManager, type Queue, type QueueCall } from './in_queue';
+type TrackerQueue = { (): void; q?: QueueCall[] | Queue };
 
 declare global {
   interface Window {
@@ -36,13 +37,40 @@ declare global {
      * Window namespace used by Snowplow tracker.
      * Configurable through the --whitelabel build option. Defaults to 'GlobalSnowplowNamespace'.
      */
-    GlobalSnowplowNamespace: Array<string>;
-    [key: string]: unknown;
+    GlobalSnowplowNamespace?: Array<string>;
+    [key: string]: TrackerQueue;
   }
 }
 
-const functionName = window.GlobalSnowplowNamespace.shift() as string,
-  queue = window[functionName] as { q: Queue | Array<unknown> };
+const namespace = window.GlobalSnowplowNamespace;
+const queueAttr = document.currentScript && document.currentScript.getAttribute('data-queue');
+const warning = 'Could not find GlobalSnowplowNamespace or determine function name; file loaded outside of snippet?';
+let functionName: string | undefined;
 
-// Now replace initialization array with queue manager object
-queue.q = InQueueManager(functionName, queue.q as Array<unknown>);
+if (queueAttr) {
+  // if queue name was found we can use it directly
+  functionName = queueAttr;
+  // clean up the global namespace if it exists, though this is optional in this case
+  if (namespace && namespace.indexOf(queueAttr) != -1) {
+    namespace.splice(namespace.indexOf(queueAttr, 1));
+  }
+} else if (namespace) {
+  // standard behavior, assume the namespaces are in order and take the first value
+  functionName = namespace.shift();
+}
+
+if (functionName) {
+  const queue: TrackerQueue =
+    (window[functionName] as TrackerQueue) ||
+    function () {
+      (queue.q = queue.q || ([] as QueueCall[])).push(arguments as unknown as QueueCall);
+    };
+
+  // Now replace initialization array with queue manager object
+  queue.q = InQueueManager(functionName, queue.q || []);
+} else {
+  // the global namespace list was not found or was empty
+  // this usually indicates the SDK was loaded outside the snippet
+  // we don't know which function name to use so must fail
+  console.warn(warning);
+}

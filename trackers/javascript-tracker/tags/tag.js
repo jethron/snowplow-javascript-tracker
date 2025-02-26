@@ -28,50 +28,54 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+;(
 /**
  * Use this function to load Snowplow
  *
- * @param object - p The window
- * @param object - l The document
- * @param string - o "script", the tag name of script elements
- * @param string - w The source of the Snowplow script. Make sure you get the latest version.
- * @param string - i The Snowplow namespace. The Snowplow user should set this.
- * @param undefined - n The new script (to be created inside the function)
- * @param undefined - g The first script on the page (to be found inside the function)
+ * @param {Window} p The window
+ * @param {Document} l The document
+ * @param {"script"} o "script", the tag name of script elements
+ * @param {string} w The source of the Snowplow script. Make sure you get the latest version.
+ * @param {string} i The Snowplow namespace. The Snowplow user should set this.
+ * @param {HTMLScriptElement?} n The new script (to be created inside the function)
+ * @param {HTMLScriptElement?} g The first script on the page (to be found inside the function)
  */
-;(function(p,l,o,w,i,n,g) {
+function(p,l,o,w,i,n,g) {
 	"p:nomunge, l:nomunge, o:nomunge, w:nomunge, i:nomunge, n:nomunge, g:nomunge";
 
 	// Stop if the Snowplow namespace i already exists
-	if (!p[i]) { 
-	
+	if (!p[i]) {
+
 		// Initialise the 'GlobalSnowplowNamespace' array
 		p['GlobalSnowplowNamespace'] = p['GlobalSnowplowNamespace'] || [];
-	
+
 		// Add the new Snowplow namespace to the global array so sp.js can find it
 		p['GlobalSnowplowNamespace'].push(i);
-	
+
 		// Create the Snowplow function
 		p[i] = function() {
 			(p[i].q = p[i].q || []).push(arguments);
 		};
-	
+
 		// Initialise the asynchronous queue
 		p[i].q = p[i].q || [];
 
 		// Create a new script element
 		n = l.createElement(o);
-	
+
+		// Mark queue name
+		n.setAttribute('data-queue', i);
+
 		// Get the first script on the page
 		g = l.getElementsByTagName(o)[0];
-	
+
 		// The new script should load asynchronously
-		n.async = 1;
-	
+		n.async = !0;
+
 		// Load Snowplow
 		n.src = w;
-	
+
 		// Insert the Snowplow script before every other script so it executes as soon as possible
-		g.parentNode.insertBefore(n,g);
+		(g.parentNode || l).insertBefore(n,g);
 	}
 } (window, document, 'script', '//{{url}}/sp.js', 'new_name_here'));
