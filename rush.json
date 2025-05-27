@@ -558,6 +558,12 @@
       "projectFolder": "plugins/browser-plugin-webview",
       "reviewCategory": "plugins",
       "versionPolicyName": "tracker"
+    },
+    {
+      "packageName": "@snowplow/browser-plugin-signals-interventions",
+      "projectFolder": "plugins/browser-plugin-signals-interventions",
+      "reviewCategory": "plugins",
+      "versionPolicyName": "tracker"
     }
   ]
 }
