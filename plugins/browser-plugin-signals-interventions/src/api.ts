@@ -1,156 +1,179 @@
-import { type BrowserPlugin, type BrowserTracker } from '@snowplow/browser-tracker-core';
-import { type Logger, buildSelfDescribingEvent } from '@snowplow/tracker-core';
+import type { BrowserPlugin, BrowserTracker } from '@snowplow/browser-tracker-core';
+import { buildSelfDescribingEvent } from '@snowplow/tracker-core';
 
-import {} from './schemata';
-import { Intervention } from './types';
-import { extractEntityValues } from './util';
+import { setupBuiltInActions } from './actions';
+import { DefaultAgent } from './agent';
+import { InterventionFetcher } from './fetcher';
+import { logger, setLogger, LogLevel } from './logger';
+import { Event, Entity, Entities, MEASUREMENT_EVENTS } from './schemata';
+import type {
+  ActionId,
+  ActionRegistration,
+  Agent,
+  Intervention,
+  MeasurementSettings,
+  SignalsHandlerConfiguration,
+  SignalsInterventionConfiguration,
+  TrackerId,
+} from './types';
+import { objWithKey } from './util';
 
-export type SignalsInterventionConfiguration = {
-  endpoint: string;
-  apiPath?: string;
-  builtInAgents?: {
-    /* TODO: what should be built in? */
-    scriptRunner?: boolean; // run JS, dangerous
-    eventDispatch?: boolean; // create DOM events for app to handle?
-    actionSimulator?: boolean; // interact with the page on behalf of the user? e.g. clippy demo
-    pixelRequest?: boolean; // request an image from the client user to e.g. set cookies
-    store?: boolean; // store data in localStorage or something
-    track?:
-      | boolean
-      | {
-          // track as snowplow events
-          shouldTrack?: (iv: Intervention) => boolean;
-        };
-  };
-  entityTargets?: Record<string, string>; // map of entity_name => key/path to extract value
+const DEFAULT_ACTION_CONFIG: NonNullable<SignalsHandlerConfiguration['builtInActions']> = {
+  // actionSimulator: false,
+  domEvent: false,
+  log: false,
+  // pixelRequest: false,
+  // scriptRunner: false,
+  snowplowEvent: false,
+  // store: false,
 };
 
-const DEFAULT_PULL_API_PATH = '/api/v1/interventions';
-const DEFAULT_ENTITY_TARGETS = {
-  domain_userid: 'domain_userid',
-  domain_sessionid: 'domain_sessionid',
-  pageview_id: 'com.snowplowanalytics.snowplow/web_page.id',
-  tab_id: 'com.snowplowanalytics.snowplow/browser_context.tabId',
-};
-const DEFAULT_AGENT_CONFIG: NonNullable<SignalsInterventionConfiguration['builtInAgents']> = {
-  scriptRunner: false,
-  track: true,
+const DEFAULT_MEASUREMENT_SETTINGS: Required<MeasurementSettings> = {
+  delivery: true,
+  dispatch_accept: true,
+  dispatch_error: true,
 };
 
-const trackers: Record<string, BrowserTracker> = {};
-const customAgents: Record<string, Record<string, (iv: Intervention) => void>> = {};
-let LOG: Logger | undefined = undefined;
+const instances: Record<TrackerId, InterventionFetcher> = {};
+const agentRegistry: Record<TrackerId, Agent> = {};
+const builtInActionRegistry: Record<TrackerId, Record<ActionId, ActionRegistration>> = {};
+const customActionRegistry: Record<TrackerId, Record<ActionId, ActionRegistration>> = {};
+const measurementSettings: Record<TrackerId, Required<MeasurementSettings>> = {};
 
-/**
- * Plugin for tracking the addition and removal of elements to a page and the visibility of those elements.
- * @param param0 Plugin configuration.
- * @param param0.ignoreNextPageView Only required when use per-pageview frequency configurations and the ordering vs the pageview event matters. Defaults to `true`, which means the next pageview event will be ignored and not count as resetting the per-pageview state; this is correct if you're calling startElementTracking before calling trackPageView.
- * @returns
- */
 export function SignalsInterventionsPlugin({
-  endpoint,
-  apiPath = DEFAULT_PULL_API_PATH,
-  entityTargets = DEFAULT_ENTITY_TARGETS,
-  builtInAgents = DEFAULT_AGENT_CONFIG,
-}: SignalsInterventionConfiguration): BrowserPlugin {
-  const fullEndpoint = endpoint + apiPath;
-
-  const entityValues = {};
-  let params = '';
-  let aborter = new AbortController();
-
+  agent,
+  builtInActions = DEFAULT_ACTION_CONFIG,
+  measurement = DEFAULT_MEASUREMENT_SETTINGS,
+}: SignalsHandlerConfiguration): BrowserPlugin {
   return {
     activateBrowserPlugin(tracker) {
-      LOG?.info(`SignalsInterventionPlugin activating for tracker: ${tracker.id}`);
-      trackers[tracker.id] = tracker;
-      // TODO(jethron): Can we get some default entity IDs like domain_userid/pageview id/tab id straight away at this point?
+      logger(LogLevel.INFO, tracker.id, 'Activating plugin for tracker');
+      instances[tracker.id] = new InterventionFetcher(tracker, dispatch);
+      measurementSettings[tracker.id] = Object.assign({}, DEFAULT_MEASUREMENT_SETTINGS, measurement);
+      agentRegistry[tracker.id] = agent ?? DefaultAgent;
+      builtInActionRegistry[tracker.id] = setupBuiltInActions(builtInActions, tracker);
     },
     afterTrack(payload) {
       const trackerName = payload['tna'];
-      if (typeof trackerName === 'string' && trackerName in trackers) {
-        Object.assign(entityValues, extractEntityValues(entityTargets, payload));
-        const newParams = new URLSearchParams(entityValues).toString();
-        if (newParams != params) {
-          params = newParams;
-          aborter.abort();
-          aborter = subscribeToInterventions(
-            `${fullEndpoint}?${params}`,
-            trackers[trackerName],
-            builtInAgents,
-            customAgents[trackerName]
-          );
-        }
+      if (typeof trackerName === 'string' && trackerName in instances) {
+        instances[trackerName].update(payload);
       }
     },
-    logger(logger) {
-      LOG = logger;
+    logger(LOG) {
+      setLogger(SignalsInterventionsPlugin.name, LOG);
     },
   };
 }
 
-function subscribeToInterventions(
-  url: string,
+const measure = (
+  settings: MeasurementSettings,
   tracker: BrowserTracker,
-  builtins: NonNullable<SignalsInterventionConfiguration['builtInAgents']>,
-  customs: (typeof customAgents)[string],
-  timeoutMs: number = 500
-): AbortController {
-  const stream = new EventSource(url);
-  const abort = new AbortController();
+  measurement: keyof MeasurementSettings,
+  intervention: Intervention,
+  payload?: Event['data']
+) => {
+  let event: Event | undefined = undefined;
+  const entities: Entity[] = [
+    {
+      schema: Entities.INTERVENTION,
+      data: intervention,
+    },
+  ];
 
-  abort.signal.addEventListener('abort', () => stream.close());
-  const timeout = setTimeout(() => abort.abort('timeout'), timeoutMs);
-  stream.addEventListener('open', () => clearTimeout(timeout));
-
-  stream.addEventListener('message', (ev: MessageEvent<Intervention>) => {
-    /* TODO(jethron): Dispatch message to builtin/custom handlers */
-    /* TODO(jethron): Store state in LS and coordinate concurrent listeners via onstorage event/session storage */
-    const { track } = builtins;
-
-    if (track) {
-      if (typeof track === 'object' && track.shouldTrack && track.shouldTrack(ev.data)) {
-        /* TODO(jethron): construct proper event */
-        const event = buildSelfDescribingEvent({
-          event: {
-            schema: 'iglu:signals/intervention_received/jsonschema/1-0-0',
-            data: ev.data,
-          },
-        });
-        tracker.core.track(event);
-      }
+  const filter = settings[measurement];
+  if (filter) {
+    if (typeof filter !== 'function' || filter(intervention)) {
+      event = {
+        schema: MEASUREMENT_EVENTS[measurement],
+        data: payload ?? {},
+      };
     }
+  }
 
-    Object.entries(customs).forEach(([agent, handler]) => {
-      if (ev.data.agent_ids == null || ev.data.agent_ids.includes(agent)) {
-        setTimeout(handler, 0, ev.data);
+  if (event) {
+    tracker.core.track(buildSelfDescribingEvent({ event }), entities);
+  }
+};
+
+const dispatch = (intervention: Intervention, tracker: BrowserTracker) => {
+  /* TODO(jethron): Store state in LS and coordinate concurrent listeners via onstorage event/session storage */
+  const measurement = measurementSettings[tracker.id] ?? DEFAULT_MEASUREMENT_SETTINGS;
+  const agent = agentRegistry[tracker.id];
+  const actionSpace = {
+    ...builtInActionRegistry[tracker.id],
+    ...customActionRegistry[tracker.id],
+  };
+
+  measure(measurement, tracker, 'delivery', intervention);
+  logger(LogLevel.INFO, tracker.id, 'Attempting dispatch for intervention', intervention, agent);
+
+  const isTargeted =
+    intervention.target_agents == null ||
+    (Array.isArray(intervention.target_agents)
+      ? intervention.target_agents.includes(agent.id)
+      : intervention.target_agents == agent.id);
+
+  if (!isTargeted && !agent.handleAll) {
+    logger(LogLevel.WARN, tracker.id, 'Agent ineligible for intervention targeting', intervention, agent);
+    return;
+  }
+
+  setTimeout(
+    (intervention: Intervention, tracker: BrowserTracker, agent: Agent) => {
+      const success = () => {
+        logger(LogLevel.INFO, tracker.id, 'Agent accepted intervention', agent, intervention);
+        measure(measurement, tracker, 'dispatch_accept', intervention, {
+          agent: agent.id,
+        });
+      };
+      const failure = (err?: unknown) => {
+        logger(LogLevel.ERROR, tracker.id, 'Agent failed handling intervention', err, agent, intervention);
+        measure(measurement, tracker, 'dispatch_error', intervention, {
+          agent: agent.id,
+          error: err ? String(err) : undefined,
+        });
+      };
+
+      try {
+        const result = agent.handler(tracker, intervention, actionSpace);
+
+        if (result instanceof Promise) {
+          result.then(success, failure);
+        } else if (objWithKey(result, 'then') && typeof result.then === 'function') {
+          result.then(success, failure);
+        } else success();
+      } catch (e: unknown) {
+        failure(e);
       }
-    });
-  });
+    },
+    0,
+    intervention,
+    tracker,
+    agent
+  );
+};
 
-  stream.addEventListener('error', (ev) => LOG?.error(`Error fetching interventions: ${ev}`));
-
-  return abort;
+export function subscribeToInterventions(
+  config: SignalsInterventionConfiguration,
+  trackers: TrackerId[] = Object.keys(instances)
+) {
+  for (const trackerId of trackers) {
+    if (trackerId in instances) {
+      instances[trackerId].configure(config);
+    }
+  }
 }
 
-export function registerAgent(
-  agentId: string,
-  handler: (iv: Intervention) => void,
-  trackerList: Array<string> = Object.keys(trackers)
-) {
+export function registerAction(agent: ActionRegistration, trackerList: TrackerId[] = Object.keys(instances)) {
   trackerList.forEach((tracker) => {
-    const handlers = (customAgents[tracker] = customAgents[tracker] || {});
-    handlers[agentId] = handler;
+    const handlers = (customActionRegistry[tracker] = customActionRegistry[tracker] || {});
+    handlers[agent.id] = agent;
   });
 }
 
-export function deregisterAgent(
-  agentId: string,
-  handler?: (iv: Intervention) => void,
-  trackerList: Array<string> = Object.keys(trackers)
-) {
+export function deregisterAction(actionId: string, trackerList: TrackerId[] = Object.keys(instances)) {
   trackerList.forEach((tracker) => {
-    const handlers = (customAgents[tracker] = customAgents[tracker] || {});
-    if (handler && handlers[agentId] !== handler) return;
-    delete handlers[agentId];
+    const handlers = (customActionRegistry[tracker] = customActionRegistry[tracker] || {});
+    delete handlers[actionId];
   });
 }
