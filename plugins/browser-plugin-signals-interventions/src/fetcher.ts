@@ -1,7 +1,15 @@
 import type { BrowserTracker, Payload } from '@snowplow/browser-tracker-core';
 
 import { logger, LogLevel } from './logger';
-import type { EntityId, EntityName, JSONPointerList, Intervention, SignalsInterventionConfiguration } from './types';
+import type {
+  EntityId,
+  EntityName,
+  Fetcher,
+  FetcherFactory,
+  JSONPointerList,
+  Intervention,
+  SignalsInterventionConfiguration,
+} from './types';
 import { extractEntityValues } from './util';
 
 const DEFAULT_PULL_API_PATH = '/api/v1/interventions';
@@ -13,9 +21,9 @@ const DEFAULT_ENTITY_TARGETS: Record<EntityName, JSONPointerList> = {
 };
 const DEFAULT_CONNECTION_TIMEOUT_MS = 2500;
 
-export class InterventionFetcher {
+export class InterventionFetcher implements Fetcher {
   private readonly entityValues: Record<EntityName, EntityId> = {};
-  private readonly aborter = new AbortController();
+  private aborter = new AbortController();
   private timeoutMs = DEFAULT_CONNECTION_TIMEOUT_MS;
   private endpoint?: string;
   private newEndpoint: boolean = false;
@@ -33,6 +41,11 @@ export class InterventionFetcher {
       sid: info[6] || undefined,
     });
   }
+
+  public static create: FetcherFactory = (
+    tracker: BrowserTracker,
+    dispatch: (intervention: Intervention, tracker: BrowserTracker) => void
+  ) => new InterventionFetcher(tracker, dispatch);
 
   configure({
     endpoint,
@@ -63,9 +76,9 @@ export class InterventionFetcher {
     }
   }
 
-  requestInterventions() {
-    const aborter = this.aborter;
-    aborter.abort();
+  private requestInterventions() {
+    this.aborter.abort();
+    const aborter = (this.aborter = new AbortController());
 
     if (!this.endpoint) {
       logger(LogLevel.ERROR, this.tracker.id, 'Requested interventions from undefined endpoint');
@@ -77,7 +90,7 @@ export class InterventionFetcher {
 
     aborter.signal.addEventListener('abort', stream.close.bind(stream), { once: true });
 
-    const timeout = setTimeout(() => aborter.abort('timeout'), this.timeoutMs);
+    const timeout = setTimeout(aborter.abort.bind(aborter), this.timeoutMs);
     stream.addEventListener('open', () => clearTimeout(timeout), { once: true });
     stream.addEventListener('error', (ev) =>
       logger(LogLevel.ERROR, this.tracker.id, 'Error fetching interventions:', ev)

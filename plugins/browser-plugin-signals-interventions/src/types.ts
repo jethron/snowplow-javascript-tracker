@@ -1,4 +1,4 @@
-import type { BrowserTracker } from '@snowplow/browser-tracker-core';
+import type { BrowserTracker, Payload } from '@snowplow/browser-tracker-core';
 
 import type { MeasurementEvents } from './schemata';
 
@@ -21,8 +21,6 @@ type InterventionV2 = {
   intervention_id: string;
   name: string;
   version: number;
-  target_agents?: OneOrMore<AgentId>;
-  actions: {}[];
   attributes: Record<string, OneOrMore<string | number | boolean>>;
   targetEntity?: {
     entityName: string;
@@ -37,9 +35,8 @@ export type JSONPointerList = OneOrMore<JSONPointer>;
 
 export type EntityName = string;
 export type EntityId = string;
+export type HandlerId = string;
 export type TrackerId = string;
-export type AgentId = string;
-export type ActionId = string;
 
 export type SignalsInterventionConfiguration = {
   endpoint: string;
@@ -47,52 +44,23 @@ export type SignalsInterventionConfiguration = {
   entityTargets?: Record<EntityName, JSONPointerList>; // map of entity_name => key/path to extract value
   entityIds?: Record<EntityName, EntityId>;
   connectionTimeoutMs?: number;
-  idleTimeoutMs?: number;
 };
 
 export type MeasurementSettings = Record<MeasurementEvents, boolean | ((_: Intervention) => boolean)>;
 
 export type SignalsHandlerConfiguration = {
-  agent?: Agent;
-  builtInActions?: Partial<BuiltInActionConfiguration>;
+  fetcher?: FetcherFactory;
+  handlers?: Record<HandlerId, Handler>;
   measurement?: MeasurementSettings;
 };
 
-export type Agent = {
-  id: AgentId;
-  capabilities?: string[];
-  handleAll?: boolean;
-  handler: (
-    tracker: BrowserTracker,
-    intervention: Intervention,
-    actionSpace: Record<ActionId, ActionRegistration>
-  ) => Promise<unknown> | unknown;
-};
+export interface FetcherFactory {
+  (tracker: BrowserTracker, dispatch: (intervention: Intervention, tracker: BrowserTracker) => void): Fetcher;
+}
 
-export type ActionHandler = (
-  tracker: BrowserTracker,
-  action: InterventionV1 | InterventionV2['actions'][number]
-) => Promise<unknown> | unknown;
+export interface Fetcher {
+  configure(config: SignalsInterventionConfiguration): void;
+  update(payload?: Payload, explicitEntities?: Record<EntityName, EntityId>): void;
+}
 
-export type ActionRegistration = {
-  id: ActionId;
-  capabilities?: string[];
-  handleAll?: boolean;
-  handler: ActionHandler;
-};
-
-export type BuiltInActionConfiguration = {
-  /* TODO: what should be built in? */
-  // actionSimulator: boolean; // interact with the page on behalf of the user? e.g. clippy demo
-  domEvent: boolean | string; // create DOM events for app to handle
-  log: boolean;
-  // pixelRequest: boolean; // request an image from the client user to e.g. set cookies
-  // scriptRunner: boolean; // run JS, dangerous
-  snowplowEvent:
-    | boolean
-    | {
-        // track as snowplow events
-        shouldTrack?: (iv: Intervention) => boolean;
-      };
-  //store: boolean; // store data in localStorage or something
-};
+export type Handler = (intervention: Intervention, tracker: BrowserTracker) => Promise<unknown> | unknown;

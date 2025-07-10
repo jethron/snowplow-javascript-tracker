@@ -1,32 +1,21 @@
 import type { BrowserPlugin, BrowserTracker } from '@snowplow/browser-tracker-core';
-import { buildSelfDescribingEvent } from '@snowplow/tracker-core';
+import { buildSelfDescribingEvent, DynamicContext, resolveDynamicContext } from '@snowplow/tracker-core';
 
-import { setupBuiltInActions } from './actions';
-import { DefaultAgent } from './agent';
 import { InterventionFetcher } from './fetcher';
 import { logger, setLogger, LogLevel } from './logger';
-import { Event, Entity, Entities, MEASUREMENT_EVENTS } from './schemata';
+import { Entity, Entities, MeasurementPayload, MEASUREMENT_EVENTS } from './schemata';
 import type {
-  ActionId,
-  ActionRegistration,
-  Agent,
+  Fetcher,
+  HandlerId,
+  Handler,
   Intervention,
   MeasurementSettings,
+  OneOrMore,
   SignalsHandlerConfiguration,
   SignalsInterventionConfiguration,
   TrackerId,
 } from './types';
 import { objWithKey } from './util';
-
-const DEFAULT_ACTION_CONFIG: NonNullable<SignalsHandlerConfiguration['builtInActions']> = {
-  // actionSimulator: false,
-  domEvent: false,
-  log: false,
-  // pixelRequest: false,
-  // scriptRunner: false,
-  snowplowEvent: false,
-  // store: false,
-};
 
 const DEFAULT_MEASUREMENT_SETTINGS: Required<MeasurementSettings> = {
   delivery: true,
@@ -34,24 +23,22 @@ const DEFAULT_MEASUREMENT_SETTINGS: Required<MeasurementSettings> = {
   dispatch_error: true,
 };
 
-const instances: Record<TrackerId, InterventionFetcher> = {};
-const agentRegistry: Record<TrackerId, Agent> = {};
-const builtInActionRegistry: Record<TrackerId, Record<ActionId, ActionRegistration>> = {};
-const customActionRegistry: Record<TrackerId, Record<ActionId, ActionRegistration>> = {};
+const instances: Record<TrackerId, Fetcher> = {};
+const handlerRegistry: Record<TrackerId, Record<HandlerId, Handler>> = {};
 const measurementSettings: Record<TrackerId, Required<MeasurementSettings>> = {};
 
-export function SignalsInterventionsPlugin({
-  agent,
-  builtInActions = DEFAULT_ACTION_CONFIG,
-  measurement = DEFAULT_MEASUREMENT_SETTINGS,
-}: SignalsHandlerConfiguration): BrowserPlugin {
+export function SignalsInterventionsPlugin(
+  { fetcher, measurement = DEFAULT_MEASUREMENT_SETTINGS, handlers = {} }: SignalsHandlerConfiguration = {
+    measurement: DEFAULT_MEASUREMENT_SETTINGS,
+    handlers: {},
+  }
+): BrowserPlugin {
   return {
     activateBrowserPlugin(tracker) {
       logger(LogLevel.INFO, tracker.id, 'Activating plugin for tracker');
-      instances[tracker.id] = new InterventionFetcher(tracker, dispatch);
+      instances[tracker.id] = fetcher ? fetcher(tracker, dispatch) : InterventionFetcher.create(tracker, dispatch);
       measurementSettings[tracker.id] = Object.assign({}, DEFAULT_MEASUREMENT_SETTINGS, measurement);
-      agentRegistry[tracker.id] = agent ?? DefaultAgent;
-      builtInActionRegistry[tracker.id] = setupBuiltInActions(builtInActions, tracker);
+      handlerRegistry[tracker.id] = Object.assign(handlerRegistry[tracker.id] ?? {}, handlers);
     },
     afterTrack(payload) {
       const trackerName = payload['tna'];
@@ -96,61 +83,52 @@ const measure = (
 };
 
 const dispatch = (intervention: Intervention, tracker: BrowserTracker) => {
-  /* TODO(jethron): Store state in LS and coordinate concurrent listeners via onstorage event/session storage */
   const measurement = measurementSettings[tracker.id] ?? DEFAULT_MEASUREMENT_SETTINGS;
-  const agent = agentRegistry[tracker.id];
-  const actionSpace = {
-    ...builtInActionRegistry[tracker.id],
-    ...customActionRegistry[tracker.id],
-  };
+  const handlers = handlerRegistry[tracker.id] ?? {};
 
-  measure(measurement, tracker, 'delivery', intervention);
-  logger(LogLevel.INFO, tracker.id, 'Attempting dispatch for intervention', intervention, agent);
+  const handlerIds = Object.keys(handlers);
 
-  const isTargeted =
-    intervention.target_agents == null ||
-    (Array.isArray(intervention.target_agents)
-      ? intervention.target_agents.includes(agent.id)
-      : intervention.target_agents == agent.id);
+  if (!handlerIds.length)
+    return logger(LogLevel.WARN, tracker.id, 'No handlers registered for intervention', intervention);
+  logger(LogLevel.INFO, tracker.id, 'Attempting dispatch for intervention', intervention, handlerIds);
+  measure(measurement, tracker, 'delivery', intervention, { handlers: handlerIds });
 
-  if (!isTargeted && !agent.handleAll) {
-    logger(LogLevel.WARN, tracker.id, 'Agent ineligible for intervention targeting', intervention, agent);
-    return;
+  for (const [handlerId, handler] of Object.entries(handlers)) {
+    setTimeout(
+      (handlerId: HandlerId, handler: Handler, intervention: Intervention, tracker: BrowserTracker) => {
+        const success = () => {
+          logger(LogLevel.INFO, tracker.id, 'Intervention handled', handlerId, intervention);
+          measure(measurement, tracker, 'dispatch_accept', intervention, {
+            handler: handlerId,
+          });
+        };
+        const failure = (err?: unknown) => {
+          logger(LogLevel.ERROR, tracker.id, 'Handler failed processing intervention', err, handlerId, intervention);
+          measure(measurement, tracker, 'dispatch_error', intervention, {
+            handler: handlerId,
+            error: err ? String(err) : undefined,
+          });
+        };
+
+        try {
+          const result = handler(intervention, tracker);
+
+          if (result instanceof Promise) {
+            result.then(success, failure);
+          } else if (objWithKey(result, 'then') && typeof result.then === 'function') {
+            result.then(success, failure);
+          } else success();
+        } catch (e: unknown) {
+          failure(e);
+        }
+      },
+      0,
+      handlerId,
+      handler,
+      intervention,
+      tracker
+    );
   }
-
-  setTimeout(
-    (intervention: Intervention, tracker: BrowserTracker, agent: Agent) => {
-      const success = () => {
-        logger(LogLevel.INFO, tracker.id, 'Agent accepted intervention', agent, intervention);
-        measure(measurement, tracker, 'dispatch_accept', intervention, {
-          agent: agent.id,
-        });
-      };
-      const failure = (err?: unknown) => {
-        logger(LogLevel.ERROR, tracker.id, 'Agent failed handling intervention', err, agent, intervention);
-        measure(measurement, tracker, 'dispatch_error', intervention, {
-          agent: agent.id,
-          error: err ? String(err) : undefined,
-        });
-      };
-
-      try {
-        const result = agent.handler(tracker, intervention, actionSpace);
-
-        if (result instanceof Promise) {
-          result.then(success, failure);
-        } else if (objWithKey(result, 'then') && typeof result.then === 'function') {
-          result.then(success, failure);
-        } else success();
-      } catch (e: unknown) {
-        failure(e);
-      }
-    },
-    0,
-    intervention,
-    tracker,
-    agent
-  );
 };
 
 export function subscribeToInterventions(
@@ -164,16 +142,23 @@ export function subscribeToInterventions(
   }
 }
 
-export function registerAction(agent: ActionRegistration, trackerList: TrackerId[] = Object.keys(instances)) {
-  trackerList.forEach((tracker) => {
-    const handlers = (customActionRegistry[tracker] = customActionRegistry[tracker] || {});
-    handlers[agent.id] = agent;
-  });
+export function addInterventionHandlers(
+  handlers: Record<HandlerId, Handler>,
+  trackers: TrackerId[] = Object.keys(instances)
+) {
+  for (const trackerId of trackers) {
+    handlerRegistry[trackerId] = Object.assign(handlerRegistry[trackerId] ?? {}, handlers);
+  }
 }
 
-export function deregisterAction(actionId: string, trackerList: TrackerId[] = Object.keys(instances)) {
-  trackerList.forEach((tracker) => {
-    const handlers = (customActionRegistry[tracker] = customActionRegistry[tracker] || {});
-    delete handlers[actionId];
-  });
+export function removeInterventionHandlers(
+  handlerId: OneOrMore<HandlerId>,
+  trackers: TrackerId[] = Object.keys(instances)
+) {
+  const toRemove = Array.isArray(handlerId) ? handlerId : [handlerId];
+  for (const handlerId of toRemove) {
+    for (const trackerId of trackers) {
+      delete handlerRegistry[trackerId][handlerId];
+    }
+  }
 }
