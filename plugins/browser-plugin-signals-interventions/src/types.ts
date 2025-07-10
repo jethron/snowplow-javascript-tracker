@@ -3,67 +3,214 @@ import type { DynamicContext } from '@snowplow/tracker-core';
 
 import type { MeasurementEvents } from './schemata';
 
+/**
+ * An Intervention payload received from the Signals API.
+ */
 export type Intervention = InterventionV1 | InterventionV2;
 
+/**
+ * Version 1 Intervention format
+ * @deprecated Version 1 can be identified by the presence of the `method` property
+ */
 type InterventionV1 = {
+  /**
+   * Unique identifier for this triggered Intervention instance. Interventions triggered against different Entities should be deduped by this ID.
+   */
   intervention_id: string;
+  /**
+   * The unique name/identifier for the Intervention (or its definition).
+   */
   name: string;
+  /**
+   * Version number for this intervention's definition if applicable.
+   */
   version: number;
+  /**
+   * The intended action the intervention should take.
+   * @deprecated
+   */
   method: 'clear_attribute' | 'set_attribute' | 'script' | 'computer_use_agent' | 'remote_agent';
+  /**
+   * Identifiers for which agents should handle this intervention.
+   * @deprecated
+   */
   target_agents?: string;
+  /**
+   * URI or location of resource intended to run the agent or be input to the agent.
+   */
   script_uri?: string;
+  /**
+   * Opaque additional information to be passed to the agent.
+   * @deprecated
+   */
   context: {
+    /**
+     * The complete or requested set of attributes for the Entity this intervention was triggered against an their values when it was triggered.
+     * @deprecated See `attributes` in `InterventionV2`
+     */
     $attributes: Record<string, OneOrMore<string | number | boolean>>;
+    /**
+     * Other information provided to the intervention by its definition or publisher.
+     * @deprecated
+     */
     [key: string]: unknown;
   };
 };
 
+/**
+ * Version 2 Intervention format
+ */
 type InterventionV2 = {
+  /**
+   * Unique identifier for this triggered Intervention instance. Interventions triggered against different Entities should be deduped by this ID.
+   */
   intervention_id: string;
+  /**
+   * The unique name/identifier for the Intervention (or its definition).
+   */
   name: string;
+  /**
+   * Version number for this intervention's definition if applicable.
+   */
   version: number;
+  /**
+   * The complete or requested set of attributes for the Entity this intervention was triggered against an their values when it was triggered.
+   */
   attributes: Record<string, OneOrMore<string | number | boolean>>;
+  /**
+   * Information about the Entity that triggered this intervention or is intended to receive it.
+   */
   targetEntity?: {
-    entityName: string;
-    entityId?: string;
+    /**
+     * The name/type of Entity that is the target/triggerer of this intervention.
+     */
+    entityName: EntityName;
+    /**
+     * The specific identifier for the instance of type `entityName` that is the target/triggerer of this intervention.
+     */
+    entityId?: EntityId;
   };
 };
 
+/**
+ * Convenience utility, allowing a single scalar or array of multiple scalar values of type T.
+ */
 export type OneOrMore<T> = T | T[];
 
+/**
+ * A JSON Pointer is a slash-separated path of key segments for identifying a single JSON value within a complex JSON document. (see RFC 6901)
+ */
 export type JSONPointer = '' | `/${string}`;
+/**
+ * A single or array of JSON Pointers. The first to return a non-undefined result is the value used.
+ */
 export type JSONPointerList = OneOrMore<JSONPointer>;
 
+/**
+ * Handle for an entity type to request Interventions for. The name is paired with an EntityId as URL parameters in the request for Interventions.
+ */
 export type EntityName = string;
+/**
+ * An identifier for a specific Entity instance.
+ */
 export type EntityId = string;
+/**
+ * Unique name/identifier for an Intervention handler.
+ */
 export type HandlerId = string;
+/**
+ * Unique ID/namespace for a Snowplow tracker instance.
+ */
 export type TrackerId = string;
 
+/**
+ * Configuration the API to request interventions from.
+ */
 export type SignalsInterventionConfiguration = {
+  /**
+   * The Signals API endpoint to request from. Should be a hostname, with optional scheme or path prefix.
+   */
   endpoint: string;
+  /**
+   * The API call path to append to `endpoint`, if required. Defaults to `/api/v1/interventions`.
+   */
   apiPath?: string;
+  /**
+   * A definition of entity types and JSON Pointers to extract the ID values from. These will be extracted from events as they are tracked to update the Intervention request as values are updated.
+   */
   entityTargets?: Record<EntityName, JSONPointerList>; // map of entity_name => key/path to extract value
+  /**
+   * An explicit set of entity types and corresponding IDs to request interventions for.
+   */
   entityIds?: Record<EntityName, EntityId>;
+  /**
+   * Timeout duration to wait for the initial API to accept the Intervention request.
+   */
   connectionTimeoutMs?: number;
 };
 
+/**
+ * Configuration for the events generated by the plugin when interventions are received/handled.
+ * Each type of event can be enabled/disabled, or decided dynamically via a callback.
+ */
 export type MeasurementSettings = Record<MeasurementEvents, boolean | ((_: Intervention) => boolean)>;
 
+/**
+ * Initial plugin configuration for receiving Interventions.
+ * Controls initial handlers, measurement settings, and optionally a custom fetcher may be provided.
+ */
 export type SignalsHandlerConfiguration = {
+  /**
+   * Custom function to build a `Fetcher` given a `BrowserTracker` instance and `dispatch` callback to deliver any received interventions to registered handlers.
+   */
   fetcher?: FetcherFactory;
+  /**
+   * Map of custom handlers to call with custom Interventions received. If not provided here, they can be added later via `addInterventionHandlers`.
+   */
   handlers?: Record<HandlerId, Handler>;
+  /**
+   * Settings for changing the events automatically tracked by this plugin when interventions are delivered, successfully processed by a handler, or unsuccessfully processed by a handler.
+   */
   measurement?: Partial<MeasurementSettings> & {
+    /**
+     * Custom entities to attach to the events generated by the plugin.
+     * Callbacks will receive a label for the type of event, the intervention itself, and the event payload.
+     */
     context?: DynamicContext;
   };
 };
 
+/**
+ * A `FetcherFactory` function is called when the plugin is activated and should construct and return a `Fetcher` instance that calls the provided `dispatch` callback when Interventions are received.
+ * The plugin provides its own `DefaultFetcher` if not provided.
+ */
 export interface FetcherFactory {
   (tracker: BrowserTracker, dispatch: (intervention: Intervention, tracker: BrowserTracker) => void): Fetcher;
 }
 
+/**
+ * A `Fetcher` is expected to react to calls to `configure()` and use the provided information to subscribe to Interventions.
+ * When interventions are received, a `Fetcher` is expected to call the `dispatch` callback that was provided to the `FetchFactory` that constructed the `Fetcher` and provide the `BrowserTracker` to measure events with.
+ * `update()` will be called when new Snowplow events are observed, or explicit entity IDs are provided. It should update the connection so Interventions may be received for new entities described in the event.
+ */
 export interface Fetcher {
+  /**
+   * Accept a configuration for an interventions endpoint, and set up a connection to subscribe for Interventions on any configured entities.
+   * @param config Endpoint/entity configuration information.
+   */
   configure(config: SignalsInterventionConfiguration): void;
+  /**
+   * Called when a new Snowplow event has been observed or entity IDs provided. Entity IDs should be extracted and intervention subscription updated to accommodate new IDs if found.
+   * @param payload A Snowplow event payload observed.
+   * @param explicitEntities An explicit set of entity names/IDs to subscribe for.
+   */
   update(payload?: Payload, explicitEntities?: Record<EntityName, EntityId>): void;
 }
 
+/**
+ * `Handler`s are delivered Intervention instanced as they are received.
+ * They receive the Intervention payload and the tracker instance if needed to pull other state if required.
+ * The function may `return` to be considered successfully handled, or `throw` to be considered a failure, which the plugin will track as an event.
+ * Async functions or functions that return Promises will be awaited and resolve/reject are treated as success/failure.
+ */
 export type Handler = (intervention: Intervention, tracker: BrowserTracker) => Promise<unknown> | unknown;

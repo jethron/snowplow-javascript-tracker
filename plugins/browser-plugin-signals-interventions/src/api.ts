@@ -23,10 +23,16 @@ const DEFAULT_MEASUREMENT_SETTINGS: Required<MeasurementSettings> = {
   dispatch_error: true,
 };
 
-const instances: Record<TrackerId, Fetcher> = {};
-const handlerRegistry: Record<TrackerId, Record<HandlerId, Handler>> = {};
-const measurementSettings: Record<TrackerId, Required<MeasurementSettings>> = {};
+/* Per-tracker state */
+const instances: Record<TrackerId, Fetcher> = {}; // entities will likely vary by tracker, so each set will need its own fetcher
+const handlerRegistry: Record<TrackerId, Record<HandlerId, Handler>> = {}; // handlers can be added/removed for individual trackers
+const measurementSettings: Record<TrackerId, Required<MeasurementSettings>> = {}; // currently global and only specified per-plugin instance but may be required in future
 
+/**
+ * Create an instance of the Signals Interventions plugin.
+ * @param configuration Configuration for the plugin
+ * @returns Configured plugin instance
+ */
 export function SignalsInterventionsPlugin(
   { fetcher, measurement = DEFAULT_MEASUREMENT_SETTINGS, handlers = {} }: SignalsHandlerConfiguration = {
     measurement: DEFAULT_MEASUREMENT_SETTINGS,
@@ -52,6 +58,14 @@ export function SignalsInterventionsPlugin(
   };
 }
 
+/**
+ * Tracks an event upon receipt/handling of an intervention unless configured not to.
+ * @param settings Measurement settings defining whether an event should fire or not, and configuring custom context
+ * @param tracker The tracker to track the event with
+ * @param measurement The type of event to track
+ * @param intervention The intervention payload in question
+ * @param payload An event-specific payload, if required according to `measurement`
+ */
 const measure = <M extends keyof MeasurementSettings, ME extends MeasurementPayload<M>, PL extends ME['data']>(
   settings: MeasurementSettings & { context?: DynamicContext },
   tracker: BrowserTracker,
@@ -64,7 +78,13 @@ const measure = <M extends keyof MeasurementSettings, ME extends MeasurementPayl
     const entities: Entity[] = [
       {
         schema: Entities.INTERVENTION,
-        data: intervention,
+        data: {
+          intervention_id: intervention.intervention_id,
+          name: intervention.name,
+          version: intervention.version,
+          entity: 'targetEntity' in intervention ? intervention.targetEntity : undefined,
+          attributes: 'attributes' in intervention ? intervention.attributes : intervention.context.$attributes,
+        },
       },
     ];
 
@@ -80,7 +100,12 @@ const measure = <M extends keyof MeasurementSettings, ME extends MeasurementPayl
   }
 };
 
-const dispatch = (intervention: Intervention, tracker: BrowserTracker) => {
+/**
+ * Called by the `Fetcher` to track receipt of an Intervention and distribute to any handlers
+ * @param intervention The intervention payload that was fetched
+ * @param tracker The tracker associated with the plugin
+ */
+const dispatch = (intervention: Intervention, tracker: BrowserTracker): void => {
   const measurement = measurementSettings[tracker.id] ?? DEFAULT_MEASUREMENT_SETTINGS;
   const handlers = handlerRegistry[tracker.id] ?? {};
 
@@ -129,10 +154,15 @@ const dispatch = (intervention: Intervention, tracker: BrowserTracker) => {
   }
 };
 
+/**
+ * Configure the endpoint information for the plugin's `Fetcher` to subscribe to events from
+ * @param config Configuration about the endpoint and entity IDs/definitions to configure
+ * @param trackers List of tracker IDs that have activated the plugin to configure a `Fetcher` for
+ */
 export function subscribeToInterventions(
   config: SignalsInterventionConfiguration,
   trackers: TrackerId[] = Object.keys(instances)
-) {
+): void {
   for (const trackerId of trackers) {
     if (trackerId in instances) {
       instances[trackerId].configure(config);
@@ -140,20 +170,30 @@ export function subscribeToInterventions(
   }
 }
 
+/**
+ * Start calling the given handlers when new interventions are received
+ * @param handlers Map of handler IDs to handler functions to call with new interventions
+ * @param trackers List of tracker IDs that have activated the plugin to add these handlers to
+ */
 export function addInterventionHandlers(
   handlers: Record<HandlerId, Handler>,
   trackers: TrackerId[] = Object.keys(instances)
-) {
+): void {
   for (const trackerId of trackers) {
     handlerRegistry[trackerId] = Object.assign(handlerRegistry[trackerId] ?? {}, handlers);
   }
 }
 
+/**
+ * Stop calling handlers with the given IDs with new interventions
+ * @param handlerIds One or more handler IDs to remove
+ * @param trackers List of trackers to remove the handlers for; defaults to all trackers that have activated the plugin.
+ */
 export function removeInterventionHandlers(
-  handlerId: OneOrMore<HandlerId>,
+  handlerIds: OneOrMore<HandlerId>,
   trackers: TrackerId[] = Object.keys(instances)
-) {
-  const toRemove = Array.isArray(handlerId) ? handlerId : [handlerId];
+): void {
+  const toRemove = Array.isArray(handlerIds) ? handlerIds : [handlerIds];
   for (const handlerId of toRemove) {
     for (const trackerId of trackers) {
       delete handlerRegistry[trackerId][handlerId];

@@ -21,6 +21,9 @@ const DEFAULT_ENTITY_TARGETS: Record<EntityName, JSONPointerList> = {
 };
 const DEFAULT_CONNECTION_TIMEOUT_MS = 2500;
 
+/**
+ * Default `Fetcher` implementation; uses SSEs, auto updates based on observed entity IDs defined with JSON Pointers
+ */
 export class InterventionFetcher implements Fetcher {
   private readonly entityValues: Record<EntityName, EntityId> = {};
   private aborter = new AbortController();
@@ -34,6 +37,7 @@ export class InterventionFetcher implements Fetcher {
     private readonly tracker: BrowserTracker,
     private readonly dispatch: (intervention: Intervention, tracker: BrowserTracker) => void
   ) {
+    // reasonable defaults even without any events observed
     const info = tracker.getDomainUserInfo();
 
     this.update({
@@ -42,6 +46,12 @@ export class InterventionFetcher implements Fetcher {
     });
   }
 
+  /**
+   * Factory to match signature of public interface and create the default fetcher instance
+   * @param tracker Tracker activating the plugin
+   * @param dispatch Callback to pass interventions to
+   * @returns `InterventionFetcher` instance
+   */
   public static create: FetcherFactory = (
     tracker: BrowserTracker,
     dispatch: (intervention: Intervention, tracker: BrowserTracker) => void
@@ -76,9 +86,12 @@ export class InterventionFetcher implements Fetcher {
     }
   }
 
-  private requestInterventions() {
-    this.aborter.abort();
-    const aborter = (this.aborter = new AbortController());
+  /**
+   * Set up a new SSE connection and start dispatching any received events
+   */
+  private requestInterventions(): void {
+    this.aborter.abort(); // abort any previous connection
+    const aborter = (this.aborter = new AbortController()); // new controller to reset aborted state
 
     if (!this.endpoint) {
       logger(LogLevel.ERROR, this.tracker.id, 'Requested interventions from undefined endpoint');
@@ -89,7 +102,6 @@ export class InterventionFetcher implements Fetcher {
     const stream = new EventSource(url);
 
     aborter.signal.addEventListener('abort', stream.close.bind(stream), { once: true });
-
     const timeout = setTimeout(aborter.abort.bind(aborter), this.timeoutMs);
     stream.addEventListener('open', () => clearTimeout(timeout), { once: true });
     stream.addEventListener('error', (ev) =>

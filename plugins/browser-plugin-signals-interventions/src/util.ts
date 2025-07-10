@@ -12,7 +12,7 @@ const EVENT_SCHEMAS = {
   ti: 'iglu:com.snowplowanalytics.snowplow/transaction_item/1-0-0',
   pv: 'iglu:com.snowplowanalytics.snowplow/page_view/jsonschema/1-0-0',
   pp: 'iglu:com.snowplowanalytics.snowplow/page_ping/jsonschema/1-0-0',
-  ue: '',
+  ue: '', // here to pass an `in` check below; needs to be extracted from SDJ payload
 };
 
 export const objWithKey = <T extends string>(obj: unknown, key: T): obj is { [key in T]: unknown } =>
@@ -59,6 +59,10 @@ const extractDimensionValueFrom =
     }
   };
 
+/**
+ * `Payload` instances access data via their tracker protocol field names, rather than the more human-friendly ones users are familiar with from enriched data.
+ * This maps the enriched fields back to their TP equivalents; allowing for field extraction where necessary.
+ */
 const selectorMap = {
   app_id: 'aid',
   platform: 'p',
@@ -167,7 +171,7 @@ const selectorMap = {
 
 const parseJsonPointer = (pointer: JSONPointer): string[] | undefined => {
   if (!pointer) return;
-  if (pointer[0] !== '/') pointer = `/${pointer}`;
+  if (pointer[0] !== '/') pointer = `/${pointer}`; // for atomic-level fields, this will allow regular names since JSON Pointer isn't super intuitive
   return pointer
     .split('/')
     .map((segment) => segment.replace(/~1/g, '/').replace(/~0/g, '~'))
@@ -190,6 +194,9 @@ const parseEncodedFields = (evt: unknown, fields: string[]) =>
     }
   });
 
+/**
+ * Build a lookup map of `vendor: name[]` for entities to lookup more easily
+ */
 const summarizeEntities = (evt: unknown): Record<string, Record<string, unknown[]>> => {
   const fields = parseEncodedFields(evt, ['co', 'cx']);
 
@@ -212,6 +219,9 @@ const summarizeEntities = (evt: unknown): Record<string, Record<string, unknown[
   }, {});
 };
 
+/**
+ * Build a lookup map of `vendor: name` for SDE payloads to lookup more easily
+ */
 const summarizeEvent = (evt: unknown): Record<string, Record<string, unknown>> => {
   const fields = parseEncodedFields(evt, ['ue_pr', 'ue_px']);
 
@@ -258,6 +268,7 @@ const derefJsonPointer = (pointerString: JSONPointer, obj: unknown): unknown => 
   if (pointer == null) return obj; // return whole document
   if (typeof obj !== 'object' || obj === null) return; // no segments will work
 
+  // map enriched fieldname <> TP field
   if (pointer[0] in selectorMap) {
     const mappedSelector = selectorMap[pointer[0] as keyof typeof selectorMap];
     if (typeof mappedSelector === 'string' && objWithKey(obj, mappedSelector)) {
@@ -267,6 +278,7 @@ const derefJsonPointer = (pointerString: JSONPointer, obj: unknown): unknown => 
     }
   }
 
+  // descend into nested SDJ payloads
   let cursor: unknown = obj;
 
   if (ENTITY_ALIASES.indexOf(pointer[0]) !== -1) cursor = { [pointer[0]]: summarizeEntities(cursor) };
@@ -283,6 +295,12 @@ const derefJsonPointer = (pointerString: JSONPointer, obj: unknown): unknown => 
   return cursor;
 };
 
+/**
+ * Given a list of rules to extract entity IDs and a Snowplow event payload, return any extracted ID results.
+ * @param targets Map of entity names to rule definitions for how to find ID values
+ * @param pb Snowplow event
+ * @returns Resulting IDs extracted from the event
+ */
 export function extractEntityValues(targets: Record<EntityName, JSONPointerList>, pb: Payload): Record<string, string> {
   const extracted: Record<EntityName, string> = {};
 

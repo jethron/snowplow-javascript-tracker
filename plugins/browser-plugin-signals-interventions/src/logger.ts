@@ -12,11 +12,17 @@ export enum LogLevel {
 let name: string;
 let LOG: Logger;
 
+/**
+ * Wrap the passed logger so that it's clear which plugin/tracker instance log messages refer to
+ * @param level Log level for the logged message
+ * @param trackerId Tracker ID logging the event
+ * @param args Log message and other arguments
+ */
 export const logger = <L extends keyof Omit<Logger, 'setLogLevel'>>(
   level: L,
   trackerId: TrackerId,
   ...args: Parameters<Logger[L]>
-) => {
+): void => {
   if (!name || !LOG) return;
 
   const prefix = `[${name}:${trackerId}] `;
@@ -28,7 +34,7 @@ export const logger = <L extends keyof Omit<Logger, 'setLogLevel'>>(
   }
 };
 
-export const setLogger = (plugin: string, log: Logger) => {
+export const setLogger = (plugin: string, log: Logger): void => {
   name = plugin;
   LOG = log;
 };
