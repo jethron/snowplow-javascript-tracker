@@ -52,33 +52,31 @@ export function SignalsInterventionsPlugin(
   };
 }
 
-const measure = (
-  settings: MeasurementSettings,
+const measure = <M extends keyof MeasurementSettings, ME extends MeasurementPayload<M>, PL extends ME['data']>(
+  settings: MeasurementSettings & { context?: DynamicContext },
   tracker: BrowserTracker,
-  measurement: keyof MeasurementSettings,
+  measurement: M,
   intervention: Intervention,
-  payload?: Event['data']
+  payload: PL
 ) => {
-  let event: Event | undefined = undefined;
-  const entities: Entity[] = [
-    {
-      schema: Entities.INTERVENTION,
-      data: intervention,
-    },
-  ];
-
   const filter = settings[measurement];
-  if (filter) {
-    if (typeof filter !== 'function' || filter(intervention)) {
-      event = {
-        schema: MEASUREMENT_EVENTS[measurement],
-        data: payload ?? {},
-      };
-    }
-  }
+  if (filter && (typeof filter !== 'function' || filter(intervention))) {
+    const entities: Entity[] = [
+      {
+        schema: Entities.INTERVENTION,
+        data: intervention,
+      },
+    ];
 
-  if (event) {
-    tracker.core.track(buildSelfDescribingEvent({ event }), entities);
+    tracker.core.track(
+      buildSelfDescribingEvent<Record<string, unknown>>({
+        event: {
+          schema: MEASUREMENT_EVENTS[measurement],
+          data: payload,
+        },
+      }),
+      resolveDynamicContext([...entities, ...(settings.context ?? [])], measurement, intervention, payload)
+    );
   }
 };
 

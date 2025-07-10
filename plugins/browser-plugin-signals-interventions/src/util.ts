@@ -22,7 +22,7 @@ const extractUrlFrom =
   <F extends string>(part: keyof URL, field: F) =>
   (event: { [_ in F]?: string }): string | undefined => {
     try {
-      return new URL(event[field]!)[part].toString();
+      return new URL(event[field]!)[part].toString() || undefined;
     } catch (_) {
       return;
     }
@@ -143,11 +143,11 @@ const selectorMap = {
   br_features_silverlight: 'f_ag',
   br_cookies: 'cookie',
   br_colordepth: 'cd',
-  br_viewwidth: extractDimensionValueFrom(0, 'res'),
-  br_viewheight: extractDimensionValueFrom(1, 'res'),
+  br_viewwidth: extractDimensionValueFrom(0, 'vp'),
+  br_viewheight: extractDimensionValueFrom(1, 'vp'),
   os_timezone: 'tz',
-  dvce_screenwidth: extractDimensionValueFrom(0, 'vp'),
-  dvce_screenheight: extractDimensionValueFrom(1, 'vp'),
+  dvce_screenwidth: extractDimensionValueFrom(0, 'res'),
+  dvce_screenheight: extractDimensionValueFrom(1, 'res'),
   doc_charset: 'cs',
   doc_width: extractDimensionValueFrom(0, 'ds'),
   doc_height: extractDimensionValueFrom(1, 'ds'),
@@ -243,6 +243,8 @@ const getEventSelf = (evt: unknown): { vendor: string; name: string; format: str
     if (objWithKey(ue, 'data') && objWithKey(ue.data, 'schema') && typeof ue.data.schema === 'string') {
       schema = ue.data.schema;
     }
+  } else {
+    schema = EVENT_SCHEMAS[evt.e as keyof typeof EVENT_SCHEMAS];
   }
 
   if (typeof schema === 'string' && schema.indexOf('iglu:') === 0) {
@@ -288,6 +290,7 @@ export function extractEntityValues(targets: Record<EntityName, JSONPointerList>
     pointers = Array.isArray(pointers) ? pointers : [pointers];
 
     for (const pointer of pointers) {
+      if (pointer === '') continue;
       const candidateId = derefJsonPointer(pointer, pb);
       if (candidateId != null) {
         extracted[entityName] = String(candidateId);

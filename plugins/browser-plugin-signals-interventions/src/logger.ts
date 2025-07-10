@@ -21,7 +21,7 @@ export const logger = <L extends keyof Omit<Logger, 'setLogLevel'>>(
 
   const prefix = `[${name}:${trackerId}] `;
   if (typeof args[0] === 'string') {
-    const msg = prefix + args.unshift();
+    const msg = prefix + args.shift();
     LOG[level](msg, ...args);
   } else {
     LOG[level](prefix, ...args);
