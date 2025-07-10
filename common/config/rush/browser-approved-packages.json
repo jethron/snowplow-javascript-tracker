@@ -311,6 +311,10 @@
       "allowedCategories": [ "trackers" ]
     },
     {
+      "name": "eventsourcemock",
+      "allowedCategories": [ "plugins" ]
+    },
+    {
       "name": "got",
       "allowedCategories": [ "trackers" ]
     },
