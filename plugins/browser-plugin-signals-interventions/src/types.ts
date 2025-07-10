@@ -1,4 +1,5 @@
 import type { BrowserTracker, Payload } from '@snowplow/browser-tracker-core';
+import type { DynamicContext } from '@snowplow/tracker-core';
 
 import type { MeasurementEvents } from './schemata';
 
@@ -51,7 +52,9 @@ export type MeasurementSettings = Record<MeasurementEvents, boolean | ((_: Inter
 export type SignalsHandlerConfiguration = {
   fetcher?: FetcherFactory;
   handlers?: Record<HandlerId, Handler>;
-  measurement?: MeasurementSettings;
+  measurement?: Partial<MeasurementSettings> & {
+    context?: DynamicContext;
+  };
 };
 
 export interface FetcherFactory {
